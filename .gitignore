@@ -1,0 +1,17 @@
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Streamlit local configuration and secrets
+.streamlit/config.toml
+.streamlit/secrets.toml
+
+# IDE settings (optional but recommended for VS Code)
+.vscode/
+.idea/
