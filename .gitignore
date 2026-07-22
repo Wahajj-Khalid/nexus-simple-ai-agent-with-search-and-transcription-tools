@@ -1,17 +1,39 @@
-# Python bytecode cache
+# Streamlit secrets and local API configurations
+.streamlit/secrets.toml
+.streamlit/secrets.json
+*.env
+.env
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python Cache & Compiled Files
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.pytest_cache/
 
-# Virtual environment
-venv/
-.venv/
-env/
+# Temporary Audio/Video Download Caches & Local Upload Streams
+temp_audio_*
+temp_upload_*
+*.m4a
+*.mp3
+*.wav
+*.webm
+*.mp4
+*.mkv
+*.avi
+*.mov
 
-# Streamlit local configuration and secrets
-.streamlit/config.toml
-.streamlit/secrets.toml
-
-# IDE settings (optional but recommended for VS Code)
+# Operating System & IDE Files
+.DS_Store
+Thumbs.db
 .vscode/
 .idea/
+*.swp
+*.swo

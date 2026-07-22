@@ -2,281 +2,42 @@ import streamlit as st
 import uuid
 import re
 import sys
+import os
+import time
 import traceback
 from backend import run_agent_workflow
+from tools import transcribe_local_upload
 
-# Adapt system profiles to video-focused specializations
-PERSONALITIES = {
-    "Auto-Transcriptionist": {
-        "description": "Searches for a video and outputs a full structured transcript.",
-        "system_prompt": "You are an automated video transcription specialist. Your goal is to find relevant videos and generate clear, structured, and complete transcriptions.",
-        "greeting": "Hello! Provide a topic or a YouTube query, and I'll find the video and transcribe it for you."
-    },
-    "Video Summarizer": {
-        "description": "Transcribes and provides an elegant executive summary of the content.",
-        "system_prompt": "You are a professional Video Summarizer. First transcribe the video, then provide a structured executive summary highlighting core takeaways.",
-        "greeting": "Hello! Give me a search term or a direct link, and I will find, transcribe, and synthesize an elegant summary of the video."
-    },
-    "Study Guide Creator": {
-        "description": "Generates key questions, definitions, and cheat sheets from the video.",
-        "system_prompt": "You are an educational curriculum creator. Use the tools to find and transcribe relevant educational videos, then compile high-quality study guides from them.",
-        "greeting": "Hello! What educational concept or topic are we turning into a structured study guide today?"
-    }
-}
+SYSTEM_PROMPT = "You are a strict Video Transcription Agent. Find relevant videos and generate clear transcripts. Do not summarize. At the end, output 'Source Video URL: [url]'"
+GREETING = "Hello. I am your Video Transcription assistant. What video or concept should we search for and transcribe today?"
 
 MODELS = {
-    "Gemini 1.5 Flash (Fast)": "gemini-1.5-flash",
-    "Gemini 1.5 Pro (Precise)": "gemini-1.5-pro",
-    "Gemini 2.5 Flash (Balanced)": "gemini-2.5-flash"
+    "Gemini 3.5 Flash": "gemini-3.5-flash",
+    "Gemini 3.5 Flash-Lite": "gemini-3.5-flash-lite"
 }
 
 def clean_title(title: str) -> str:
     return re.sub(r'[^\x00-\x7F]+', '', title).strip()
 
+def clean_error_message(raw_error: str) -> str:
+    err_lower = raw_error.lower()
+    if "429" in err_lower or "quota" in err_lower or "resource_exhausted" in err_lower:
+        return "API Rate Limit Exceeded. Switching to Groq Whisper fallback."
+    if "503" in err_lower or "unavailable" in err_lower or "demand" in err_lower:
+        return "The model is currently experiencing high demand. Please try again later."
+    if "401" in err_lower or "403" in err_lower or "invalid" in err_lower:
+        return "Invalid API configuration parameters. Please check your active keys inside Settings."
+    return f"System Error: {raw_error.split('.')[0]}"
+
 def inject_clean_styles():
-    st.markdown("""
-        <style>
-        /* INTERCEPT STREAMLIT CORE ACCENTS */
-        :root, [data-testid="stAppViewContainer"] {
-            --primary-color: #71717a !important;
-        }
-        
-        .block-container {
-            padding-top: 1.5rem !important;
-            max-width: 800px !important;
-        }
-        
-        .element-container h3 a, .element-container h2 a {
-            display: none !important;
-        }
-        
-        hr, div[data-testid="stDivider"] {
-            margin-top: 0.3rem !important;
-            margin-bottom: 0.3rem !important;
-            padding-top: 0px !important;
-            padding-bottom: 0px !important;
-        }
-        
-        section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
-            padding-top: 1rem !important;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
-            padding-bottom: 90px !important; 
-            position: relative !important;
-            height: calc(100vh - 2rem) !important;
-        }
-
-        /* DYNAMIC SETTINGS EXPANDER WITH DEFINED BORDERS */
-        div[data-testid="stSidebar"] div.stExpander {
-            position: absolute !important;
-            bottom: 1rem !important;
-            left: 1rem !important;
-            right: 1rem !important;
-            background-color: var(--background-color) !important;
-            border: 1px solid rgba(113, 113, 122, 0.4) !important;
-            border-radius: 6px !important;
-            z-index: 999;
-        }
-        
-        div[data-testid="stSidebar"] div.stExpander details summary {
-            font-size: 0.9rem !important;
-        }
-        
-        /* INACTIVE SIDEBAR ITEMS */
-        section[data-testid="stSidebar"] button[kind="primary"],
-        section[data-testid="stSidebar"] button[kind="secondary"] {
-            background-color: transparent !important;
-            color: var(--text-color) !important;
-            opacity: 0.75;
-            border: 1px solid rgba(113, 113, 122, 0.2) !important;
-            box-shadow: none !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: flex-start !important;
-            text-align: left !important;
-            width: 100% !important;
-            padding: 0.5rem 0.75rem !important;
-            border-radius: 6px !important;
-            margin-bottom: 2px !important;
-        }
-        
-        section[data-testid="stSidebar"] button[kind="primary"] div,
-        section[data-testid="stSidebar"] button[kind="primary"] p,
-        section[data-testid="stSidebar"] button[kind="primary"] span,
-        section[data-testid="stSidebar"] button[kind="secondary"] div,
-        section[data-testid="stSidebar"] button[kind="secondary"] p,
-        section[data-testid="stSidebar"] button[kind="secondary"] span {
-            text-align: left !important;
-            justify-content: flex-start !important;
-            align-items: center !important;
-            display: inline-flex !important;
-            width: auto !important;
-            margin: 0 !important;
-        }
-        
-        /* ACTIVE SIDEBAR ITEM */
-        section[data-testid="stSidebar"] div[class*="st-key-select_"] button[kind="primary"] {
-            background-color: rgba(113, 113, 122, 0.15) !important;
-            color: var(--text-color) !important;
-            opacity: 1 !important;
-            border: 1px solid rgba(113, 113, 122, 0.5) !important;
-            border-left: 4px solid #71717a !important;
-        }
-        
-        section[data-testid="stSidebar"] button[kind="primary"]:hover,
-        section[data-testid="stSidebar"] button[kind="secondary"]:hover {
-            background-color: rgba(113, 113, 122, 0.1) !important;
-            border-color: rgba(113, 113, 122, 0.4) !important;
-            opacity: 1 !important;
-        }
-        
-        section[data-testid="stSidebar"] div[class*="st-key-del_"] button {
-            color: var(--text-color) !important;
-            opacity: 0.4 !important;
-            font-size: 1.2rem !important;
-            text-align: center !important;
-            justify-content: center !important;
-            padding: 0px !important;
-            border: none !important;
-        }
-        
-        section[data-testid="stSidebar"] div[class*="st-key-del_"] button:hover {
-            color: #ef4444 !important;
-            opacity: 1 !important;
-            background-color: transparent !important;
-            border: none !important;
-        }
-
-        /* PILL POP-OVERS WITH ENHANCED BORDERS */
-        div.st-key-model_popover button,
-        section[data-testid="stSidebar"] div[class*="st-key-persona_popover"] button {
-            background-color: var(--background-color) !important;
-            color: var(--text-color) !important;
-            border: 1px solid rgba(113, 113, 122, 0.45) !important;
-            border-radius: 20px !important;
-            padding: 0.3rem 0.8rem !important;
-            font-size: 0.85rem !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            font-weight: 500 !important;
-            width: 100% !important;
-            box-shadow: none !important;
-            height: 38px !important;
-        }
-        
-        div.st-key-model_popover button:hover,
-        section[data-testid="stSidebar"] div[class*="st-key-persona_popover"] button:hover {
-            background-color: rgba(113, 113, 122, 0.08) !important;
-            border-color: rgba(113, 113, 122, 0.7) !important;
-        }
-        
-        /* "+ NEW CHAT" WIDGET */
-        section[data-testid="stSidebar"] div[class*="st-key-new_chat_button"] button {
-            background-color: var(--background-color) !important;
-            color: var(--text-color) !important;
-            border: 1px solid rgba(113, 113, 122, 0.45) !important;
-            font-weight: 600 !important;
-            border-radius: 6px !important;
-            height: 40px !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            width: 100% !important;
-            box-shadow: none !important;
-        }
-        
-        section[data-testid="stSidebar"] div[class*="st-key-new_chat_button"] button:hover {
-            background-color: rgba(113, 113, 122, 0.08) !important;
-            border-color: rgba(113, 113, 122, 0.7) !important;
-        }
-
-        /* REMOVE CHAT AVATARS */
-        div[data-testid="stChatMessageAvatar"],
-        div[data-testid="stChatMessageAvatarUser"],
-        div[data-testid="stChatMessageAvatarAssistant"],
-        .stChatMessage [data-testid="chatAvatarIcon-user"],
-        .stChatMessage [data-testid="chatAvatarIcon-assistant"],
-        .stChatMessage img {
-            display: none !important;
-            width: 0px !important; height: 0px !important;
-            margin: 0px !important; padding: 0px !important;
-        }
-        
-        div[data-testid="stChatMessageContent"] {
-            padding-left: 0px !important;
-            margin-left: 0px !important;
-            width: 100% !important;
-        }
-
-        /* HIGHER VISIBILITY USER QUESTION BLOCK */
-        div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-user"]) {
-            background-color: rgba(113, 113, 122, 0.15) !important;
-            border: 1px solid rgba(113, 113, 122, 0.3) !important;
-            border-radius: 8px !important;
-            padding: 0.85rem 1.2rem !important;
-            margin-bottom: 1.2rem !important;
-            margin-left: auto !important;
-            max-width: 80% !important;
-        }
-        
-        div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-user"]) div[data-testid="stChatMessageContent"] {
-            text-align: right !important;
-            color: var(--text-color) !important;
-        }
-        
-        div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-assistant"]) {
-            background-color: transparent !important;
-            padding: 1rem 0rem !important;
-            margin-bottom: 1rem !important;
-        }
-
-        /* CHAT INPUT FIELD DEFINED BORDERS */
-        [data-testid="stChatInput"] {
-            border: 1px solid rgba(113, 113, 122, 0.5) !important;
-            background-color: var(--background-color) !important;
-            border-radius: 8px !important;
-        }
-        
-        [data-testid="stChatInput"]:focus-within {
-            border-color: #71717a !important;
-            box-shadow: 0 0 0 1px #71717a !important;
-        }
-        
-        [data-testid="stChatInput"] textarea:focus {
-            border-color: transparent !important;
-            box-shadow: none !important;
-            outline: none !important;
-        }
-        
-        [data-testid="stChatInput"] textarea {
-            box-shadow: none !important;
-            color: var(--text-color) !important;
-        }
-        
-        /* STABLE LIGHT/DARK DISMISSAL AND SUBMIT ACTIONS */
-        [data-testid="stChatInput"] button:disabled {
-            background-color: transparent !important;
-            color: var(--text-color) !important;
-            opacity: 0.35 !important;
-        }
-        
-        [data-testid="stChatInput"] button:not(:disabled) {
-            background-color: #71717a !important;
-            color: #ffffff !important;
-            opacity: 1 !important;
-        }
-
-        [data-testid="stChatInput"] button:not(:disabled):hover {
-            background-color: #52525b !important;
-            color: #ffffff !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    if os.path.exists("styles.css"):
+        with open("styles.css", "r", encoding="utf-8") as f:
+            css = f.read()
+        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 def run_app():
     st.set_page_config(
-        page_title="Nexus Video AI", 
+        page_title="Nexus", 
         layout="wide",
         page_icon="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><circle cx=%2250%22 cy=%2250%22 r=%2240%22 fill=%22%2371717a%22/></svg>"
     )
@@ -287,44 +48,35 @@ def run_app():
     if "current_chat_id" not in st.session_state:
         st.session_state.current_chat_id = None
     if "global_model_name" not in st.session_state:
-        st.session_state.global_model_name = "Gemini 1.5 Flash (Fast)"
-    if "selected_persona_setup" not in st.session_state:
-        st.session_state.selected_persona_setup = "Auto-Transcriptionist"
+        st.session_state.global_model_name = "Gemini 3.5 Flash"
     if "generate_response" not in st.session_state:
         st.session_state.generate_response = False
+    if "last_error" not in st.session_state:
+        st.session_state.last_error = None
+    if "local_file_to_process" not in st.session_state:
+        st.session_state.local_file_to_process = None
 
-    # -------------------------------------------------------------------------
-    # Sidebar Setup
-    # -------------------------------------------------------------------------
     with st.sidebar:
         st.markdown("<h1 style='font-size: 2rem; margin-bottom: 0px; padding-bottom: 0px; font-weight: 700;'>Nexus</h1>", unsafe_allow_html=True)
         st.divider()
         
-        st.markdown("**New Agent Mode**")
-        
-        with st.popover(st.session_state.selected_persona_setup, key="persona_popover", use_container_width=True):
-            for persona in PERSONALITIES.keys():
-                if st.button(persona, key=f"p_opt_{persona}", use_container_width=True):
-                    st.session_state.selected_persona_setup = persona
-                    st.rerun()
+        st.markdown("**New Conversation**")
         
         if st.button("+ New Chat", key="new_chat_button", use_container_width=True):
             new_id = str(uuid.uuid4())
-            persona_data = PERSONALITIES[st.session_state.selected_persona_setup]
-            
             st.session_state.chats[new_id] = {
-                "title": f"New {st.session_state.selected_persona_setup} Chat",
-                "personality": st.session_state.selected_persona_setup,
+                "title": "New Transcription Chat",
+                "personality": "Video Transcription Agent",
                 "messages": [
-                    {"role": "system", "content": persona_data["system_prompt"]},
-                    {"role": "assistant", "content": persona_data["greeting"]}
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "assistant", "content": GREETING}
                 ]
             }
             st.session_state.current_chat_id = new_id
             st.session_state.generate_response = False
+            st.session_state.last_error = None
             st.rerun()
 
-        # History list
         if st.session_state.chats:
             st.divider()
             st.markdown("**Recents**")
@@ -342,6 +94,7 @@ def run_app():
                 ):
                     st.session_state.current_chat_id = chat_id
                     st.session_state.generate_response = False
+                    st.session_state.last_error = None
                     st.rerun()
                     
                 if col_delete.button("×", key=f"del_{chat_id}"):
@@ -349,81 +102,126 @@ def run_app():
                     if st.session_state.current_chat_id == chat_id:
                         st.session_state.current_chat_id = list(st.session_state.chats.keys())[0] if st.session_state.chats else None
                         st.session_state.generate_response = False
+                        st.session_state.last_error = None
                     st.rerun()
 
-        # Input field configurations inside Settings expander
         with st.sidebar.expander("Settings", expanded=False):
             gemini_key_secrets = st.secrets.get("GEMINI_API_KEY", "")
             serp_key_secrets = st.secrets.get("SERPAPI_API_KEY", "")
+            groq_key_secrets = st.secrets.get("GROQ_API_KEY", "")
             
             if gemini_key_secrets:
-                st.caption("Gemini API Key: configured via secrets.")
+                st.caption("Active Gemini key via secrets configuration.")
                 gemini_api_key = gemini_key_secrets
             else:
-                gemini_api_key = st.text_input("Gemini API Key", type="password", placeholder="AI Studio Key...")
+                gemini_api_key = st.text_input("Gemini API Key", type="password", placeholder="Enter key...")
                 
             if serp_key_secrets:
-                st.caption("SerpApi Key: configured via secrets.")
+                st.caption("Active SerpApi key via secrets configuration.")
                 serp_api_key = serp_key_secrets
             else:
-                serp_api_key = st.text_input("SerpApi Key", type="password", placeholder="SerpApi Key...")
+                serp_api_key = st.text_input("SerpApi API Key", type="password", placeholder="Enter key...")
 
-    # Fallback default chat creator
+            if groq_key_secrets:
+                st.caption("Active Groq key via secrets configuration.")
+                groq_api_key = groq_key_secrets
+            else:
+                groq_api_key = st.text_input("Groq API Key (Whisper Transcriber)", type="password", placeholder="Enter key...")
+
     if not st.session_state.current_chat_id:
         default_id = str(uuid.uuid4())
-        default_persona = "Auto-Transcriptionist"
         st.session_state.chats[default_id] = {
             "title": "Welcome Chat",
-            "personality": default_persona,
+            "personality": "Video Transcription Agent",
             "messages": [
-                {"role": "system", "content": PERSONALITIES[default_persona]["system_prompt"]},
-                {"role": "assistant", "content": PERSONALITIES[default_persona]["greeting"]}
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "assistant", "content": GREETING}
             ]
         }
         st.session_state.current_chat_id = default_id
 
     active_chat = st.session_state.chats[st.session_state.current_chat_id]
-    active_persona = PERSONALITIES[active_chat["personality"]]
 
-    # Page Header
     st.subheader(active_chat["personality"], anchor=False)
-    st.caption(f"Scope: {active_persona['description']}")
+    st.caption("Finds, transcribes, and links YouTube videos using specialized tools.")
     st.divider()
 
-    # Chat render
     for msg in active_chat["messages"]:
         if msg["role"] == "system":
             continue
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    # -------------------------------------------------------------------------
-    # Stream Response / Agent Step-by-Step Visualization
-    # -------------------------------------------------------------------------
+    # Local upload transcription executor
+    if st.session_state.local_file_to_process:
+        uploaded_data = st.session_state.local_file_to_process
+        st.session_state.local_file_to_process = None
+        
+        with st.chat_message("assistant"):
+            status_container = st.container()
+            try:
+                g_key = groq_api_key if 'groq_api_key' in locals() else ""
+                gem_key = gemini_api_key if 'gemini_api_key' in locals() else ""
+                
+                if not gem_key and not g_key:
+                    st.error("Please configure an API Key inside Settings.")
+                else:
+                    with status_container:
+                        status_widget = st.status("Caching local upload stream...", expanded=True)
+                    
+                    temp_path = f"temp_upload_{int(time.time())}_{uploaded_data['name']}"
+                    with open(temp_path, "wb") as f:
+                        f.write(uploaded_data["content"])
+                        
+                    status_widget.update(label="File saved. Processing transcription...", state="running")
+                    
+                    result = transcribe_local_upload(temp_path, uploaded_data["name"], gem_key, g_key)
+                    
+                    if result.get("status") == "success":
+                        status_widget.update(label="Complete", state="complete", expanded=False)
+                        
+                        final_msg = (
+                            f"Successfully processed uploaded file: '{result.get('title')}'\n\n"
+                            f"Transcript:\n{result.get('transcript')}\n\n"
+                            f"Source Video URL: Local Upload"
+                        )
+                        active_chat["messages"].append({"role": "user", "content": f"Upload File: {uploaded_data['name']}"})
+                        active_chat["messages"].append({"role": "assistant", "content": final_msg})
+                        
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        st.rerun()
+                    else:
+                        status_widget.update(label="Processing Failed", state="error", expanded=True)
+                        st.error(result.get("message", "Processing error occurred."))
+                        
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+            except Exception as e:
+                st.error(clean_error_message(str(e)))
+
     if st.session_state.generate_response:
         with st.chat_message("assistant"):
-            # Beautiful intermediate status display
             status_container = st.container()
             response_placeholder = st.empty()
-            
             try:
-                if not gemini_api_key or not serp_api_key:
-                    st.error("Please configure both your Gemini and SerpApi keys in the sidebar expander.")
+                if not serp_api_key:
+                    st.error("Please configure your SerpApi key inside the Settings panel.")
                     st.session_state.generate_response = False
                     st.stop()
+                    
+                active_gemini_model = MODELS[st.session_state.global_model_name]
                 
-                model_id = MODELS[st.session_state.global_model_name]
-                
-                with status_container:
-                    status_widget = st.status("Agent initialized. Analysing scope...", expanded=True)
-                
-                # Retrieve execution stream generators
                 agent_stream = run_agent_workflow(
                     chat_history=active_chat["messages"],
-                    gemini_key=gemini_api_key,
+                    gemini_key=gemini_api_key if 'gemini_api_key' in locals() else "",
                     serp_key=serp_api_key,
-                    model_id=model_id
+                    groq_key=groq_api_key if 'groq_api_key' in locals() else "",
+                    model_id=active_gemini_model
                 )
+                
+                with status_container:
+                    status_widget = st.status("Initializing Agent...", expanded=True)
                 
                 final_text = ""
                 for step in agent_stream:
@@ -431,48 +229,65 @@ def run_app():
                     message = step.get("message")
                     
                     if status == "thinking":
-                        status_widget.update(label=f"🤔 {message}", state="running")
+                        status_widget.update(label=f"Thinking: {message}", state="running")
                     elif status == "searching":
-                        status_widget.update(label=f"🔍 {message}", state="running")
+                        status_widget.update(label=f"Searching: {message}", state="running")
                     elif status == "searching_done":
-                        status_widget.write(f"✅ {message}")
+                        status_widget.write(f"Done: {message}")
                     elif status == "transcribing":
-                        status_widget.update(label=f"🎙️ {message}", state="running")
+                        status_widget.update(label=f"Transcribing: {message}", state="running")
                     elif status == "transcribing_done":
-                        status_widget.write(f"✅ {message}")
+                        status_widget.write(f"Done: {message}")
                     elif status == "done":
-                        status_widget.update(label="✨ Process Complete", state="complete", expanded=False)
+                        status_widget.update(label="Complete", state="complete", expanded=False)
                         final_text = message
                         response_placeholder.markdown(final_text)
                         
                 active_chat["messages"].append({"role": "assistant", "content": final_text})
+                st.session_state.last_error = None
                 
             except Exception as e:
+                st.session_state.last_error = clean_error_message(str(e))
                 print(f"[Console API Error Exception]: {str(e)}", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
-                st.error(f"Execution Error: {str(e)}")
             finally:
                 st.session_state.generate_response = False
                 st.rerun()
 
-    # -------------------------------------------------------------------------
-    # Bottom Layout: Model Selection & Native Input Box
-    # -------------------------------------------------------------------------
+    if st.session_state.last_error:
+        st.error(st.session_state.last_error)
+        if st.button("Retry last request", key="retry_button"):
+            st.session_state.last_error = None
+            st.session_state.generate_response = True
+            st.rerun()
+
     with st.bottom:
-        user_input = st.chat_input("Ask Nexus to find or transcribe a video...")
+        user_input = st.chat_input("How can Nexus help you today?")
         
-        col_spacer, col_model = st.columns([0.70, 0.30])
+        col_upload, col_spacer, col_gemini = st.columns([0.15, 0.58, 0.27])
+        
+        with col_upload:
+            with st.popover("+", key="upload_popover", use_container_width=True):
+                st.write("Transcribe Local Video File")
+                uploaded_file = st.file_uploader("Select video file", type=["mp4", "mkv", "avi", "mov"], label_visibility="collapsed")
+                if uploaded_file is not None:
+                    if st.button("Transcribe", use_container_width=True, key="transcribe_local_btn"):
+                        st.session_state.local_file_to_process = {
+                            "name": uploaded_file.name,
+                            "content": uploaded_file.getbuffer()
+                        }
+                        st.rerun()
+            
         with col_spacer:
             st.write("")
             
-        with col_model:
+        with col_gemini:
             with st.popover(st.session_state.global_model_name, key="model_popover", use_container_width=True):
                 for model_name in MODELS.keys():
-                    if st.button(model_name, key=f"m_opt_{model_name}", use_container_width=True):
+                    if st.button(model_name, key=f"gem_opt_{model_name}", use_container_width=True):
                         st.session_state.global_model_name = model_name
                         st.rerun()
 
-    # Handle Submission
     if user_input:
         query = user_input.strip()
         active_chat["messages"].append({"role": "user", "content": query})
@@ -482,6 +297,7 @@ def run_app():
             active_chat["title"] = trimmed_title
 
         st.session_state.generate_response = True
+        st.session_state.last_error = None
         st.rerun()
 
 if __name__ == "__main__":

@@ -1,0 +1,239 @@
+/* INTERCEPT STREAMLIT CORE ACCENTS */
+:root, [data-testid="stAppViewContainer"] {
+    --primary-color: #71717a !important;
+}
+
+.block-container {
+    padding-top: 1.5rem !important;
+    max-width: 800px !important;
+}
+
+.element-container h3 a, .element-container h2 a {
+    display: none !important;
+}
+
+hr, div[data-testid="stDivider"] {
+    margin-top: 0.3rem !important;
+    margin-bottom: 0.3rem !important;
+    padding-top: 0px !important;
+    padding-bottom: 0px !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+    padding-top: 1rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+    padding-bottom: 90px !important; 
+    position: relative !important;
+    height: calc(100vh - 2rem) !important;
+}
+
+/* DYNAMIC SETTINGS EXPANDER WITH DEFINED BORDERS */
+div[data-testid="stSidebar"] div.stExpander {
+    position: absolute !important;
+    bottom: 1rem !important;
+    left: 1rem !important;
+    right: 1rem !important;
+    background-color: var(--background-color) !important;
+    border: 1px solid rgba(113, 113, 122, 0.4) !important;
+    border-radius: 6px !important;
+    z-index: 999;
+}
+
+div[data-testid="stSidebar"] div.stExpander details summary {
+    font-size: 0.9rem !important;
+}
+
+/* INACTIVE SIDEBAR ITEMS */
+section[data-testid="stSidebar"] button[kind="primary"],
+section[data-testid="stSidebar"] button[kind="secondary"] {
+    background-color: transparent !important;
+    color: var(--text-color) !important;
+    opacity: 0.75;
+    border: 1px solid rgba(113, 113, 122, 0.2) !important;
+    box-shadow: none !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    width: 100% !important;
+    padding: 0.5rem 0.75rem !important;
+    border-radius: 6px !important;
+    margin-bottom: 2px !important;
+}
+
+section[data-testid="stSidebar"] button[kind="primary"] div,
+section[data-testid="stSidebar"] button[kind="primary"] p,
+section[data-testid="stSidebar"] button[kind="primary"] span,
+section[data-testid="stSidebar"] button[kind="secondary"] div,
+section[data-testid="stSidebar"] button[kind="secondary"] p,
+section[data-testid="stSidebar"] button[kind="secondary"] span {
+    text-align: left !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    display: inline-flex !important;
+    width: auto !important;
+    margin: 0 !important;
+}
+
+/* ACTIVE SIDEBAR ITEM */
+section[data-testid="stSidebar"] div[class*="st-key-select_"] button[kind="primary"] {
+    background-color: rgba(113, 113, 122, 0.15) !important;
+    color: var(--text-color) !important;
+    opacity: 1 !important;
+    border: 1px solid rgba(113, 113, 122, 0.5) !important;
+    border-left: 4px solid #71717a !important;
+}
+
+section[data-testid="stSidebar"] button[kind="primary"]:hover,
+section[data-testid="stSidebar"] button[kind="secondary"]:hover {
+    background-color: rgba(113, 113, 122, 0.1) !important;
+    border-color: rgba(113, 113, 122, 0.4) !important;
+    opacity: 1 !important;
+}
+
+section[data-testid="stSidebar"] div[class*="st-key-del_"] button {
+    color: var(--text-color) !important;
+    opacity: 0.4 !important;
+    font-size: 1.2rem !important;
+    text-align: center !important;
+    justify-content: center !important;
+    padding: 0px !important;
+    border: none !important;
+}
+
+section[data-testid="stSidebar"] div[class*="st-key-del_"] button:hover {
+    color: #ef4444 !important;
+    opacity: 1 !important;
+    background-color: transparent !important;
+    border: none !important;
+}
+
+/* PILL POP-OVERS WITH ENHANCED BORDERS */
+div.st-key-upload_popover button,
+div.st-key-model_popover button,
+div.st-key-gemini_popover button,
+section[data-testid="stSidebar"] div[class*="st-key-persona_popover"] button {
+    background-color: var(--background-color) !important;
+    color: var(--text-color) !important;
+    border: 1px solid rgba(113, 113, 122, 0.45) !important;
+    border-radius: 20px !important;
+    padding: 0.3rem 0.8rem !important;
+    font-size: 0.85rem !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-weight: 500 !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    height: 38px !important;
+}
+
+div.st-key-upload_popover button:hover,
+div.st-key-model_popover button:hover,
+div.st-key-gemini_popover button:hover,
+section[data-testid="stSidebar"] div[class*="st-key-persona_popover"] button:hover {
+    background-color: rgba(113, 113, 122, 0.08) !important;
+    border-color: rgba(113, 113, 122, 0.7) !important;
+}
+
+/* "+ NEW CHAT" WIDGET */
+section[data-testid="stSidebar"] div[class*="st-key-new_chat_button"] button {
+    background-color: var(--background-color) !important;
+    color: var(--text-color) !important;
+    border: 1px solid rgba(113, 113, 122, 0.45) !important;
+    font-weight: 600 !important;
+    border-radius: 6px !important;
+    height: 40px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 100% !important;
+    box-shadow: none !important;
+}
+
+section[data-testid="stSidebar"] div[class*="st-key-new_chat_button"] button:hover {
+    background-color: rgba(113, 113, 122, 0.08) !important;
+    border-color: rgba(113, 113, 122, 0.7) !important;
+}
+
+/* REMOVE CHAT AVATARS */
+div[data-testid="stChatMessageAvatar"],
+div[data-testid="stChatMessageAvatarUser"],
+div[data-testid="stChatMessageAvatarAssistant"],
+.stChatMessage [data-testid="chatAvatarIcon-user"],
+.stChatMessage [data-testid="chatAvatarIcon-assistant"],
+.stChatMessage img {
+    display: none !important;
+    width: 0px !important; height: 0px !important;
+    margin: 0px !important; padding: 0px !important;
+}
+
+div[data-testid="stChatMessageContent"] {
+    padding-left: 0px !important;
+    margin-left: 0px !important;
+    width: 100% !important;
+}
+
+/* HIGHER VISIBILITY USER QUESTION BLOCK */
+div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-user"]) {
+    background-color: rgba(113, 113, 122, 0.15) !important;
+    border: 1px solid rgba(113, 113, 122, 0.3) !important;
+    border-radius: 8px !important;
+    padding: 0.85rem 1.2rem !important;
+    margin-bottom: 1.2rem !important;
+    margin-left: auto !important;
+    max-width: 80% !important;
+}
+
+div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-user"]) div[data-testid="stChatMessageContent"] {
+    text-align: right !important;
+    color: var(--text-color) !important;
+}
+
+div[data-testid="stChatMessage"]:has(div[data-testid="chatAvatarIcon-assistant"]) {
+    background-color: transparent !important;
+    padding: 1rem 0rem !important;
+    margin-bottom: 1rem !important;
+}
+
+/* CHAT INPUT FIELD DEFINED BORDERS */
+[data-testid="stChatInput"] {
+    border: 1px solid rgba(113, 113, 122, 0.5) !important;
+    background-color: var(--background-color) !important;
+    border-radius: 8px !important;
+}
+
+[data-testid="stChatInput"]:focus-within {
+    border-color: #71717a !important;
+    box-shadow: 0 0 0 1px #71717a !important;
+}
+
+[data-testid="stChatInput"] textarea:focus {
+    border-color: transparent !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+
+[data-testid="stChatInput"] textarea {
+    box-shadow: none !important;
+    color: var(--text-color) !important;
+}
+
+/* STABLE LIGHT/DARK DISMISSAL AND SUBMIT ACTIONS */
+[data-testid="stChatInput"] button:disabled {
+    background-color: transparent !important;
+    color: var(--text-color) !important;
+    opacity: 0.35 !important;
+}
+
+[data-testid="stChatInput"] button:not(:disabled) {
+    background-color: #71717a !important;
+    color: #ffffff !important;
+    opacity: 1 !important;
+}
+
+[data-testid="stChatInput"] button:not(:disabled):hover {
+    background-color: #52525b !important;
+    color: #ffffff !important;
+}

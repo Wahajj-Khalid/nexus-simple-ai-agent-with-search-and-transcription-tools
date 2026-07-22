@@ -1,190 +1,167 @@
 import os
 import re
+import json
 import time
-import requests
-import yt_dlp
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from tools import (
+    configure_apis,
+    call_with_retry,
+    search_knowledge_base,
+    search_video,
+    transcribe_video
+)
 
-def configure_apis(gemini_key: str, serp_key: str):
-    """Configures environment and SDK keys."""
+def configure_environment_keys(gemini_key: str, serp_key: str, groq_key: str):
     os.environ["GEMINI_API_KEY"] = gemini_key
     os.environ["SERPAPI_API_KEY"] = serp_key
-    genai.configure(api_key=gemini_key)
-
-def search_video(query: str) -> str:
-    """
-    Searches for a video on YouTube using SerpApi.
-    Returns the first matching video URL.
-    """
-    serp_key = os.getenv("SERPAPI_API_KEY", "")
-    if not serp_key:
-        return "Error: SerpApi API Key is not configured."
-        
-    url = "https://serpapi.com/search.json"
-    params = {
-        "engine": "youtube",
-        "search_query": query,
-        "api_key": serp_key
-    }
-    try:
-        response = requests.get(url, params=params, timeout=15)
-        response.raise_for_status()
-        data = response.json()
-        video_results = data.get("video_results", [])
-        if video_results:
-            return video_results[0].get("link", "No link found in results.")
-        return "No video results found."
-    except Exception as e:
-        return f"Error searching video: {str(e)}"
-
-def transcribe_video(video_url: str) -> str:
-    """
-    Downloads raw YouTube audio, uploads it to Gemini for transcription,
-    and saves the complete transcript to a file in the Knowledge Base.
-    """
-    gemini_key = os.getenv("GEMINI_API_KEY", "")
-    if not gemini_key:
-        return "Error: Gemini API Key is not configured."
-        
-    temp_filename = f"temp_audio_{int(time.time())}"
-    
-    # Best-audio m4a download prevents the strict need for external ffmpeg builds
-    ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
-        'outtmpl': f'{temp_filename}.%(ext)s',
-        'quiet': True,
-        'no_warnings': True,
-    }
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            ext = info.get('ext', 'm4a')
-            title = info.get('title', 'Unknown Title')
-            file_path = f"{temp_filename}.{ext}"
-    except Exception as e:
-        return f"Error extracting video audio: {str(e)}"
-        
-    if not os.path.exists(file_path):
-        return "Error: Audio extraction failed. Output file not generated."
-        
-    try:
-        # Upload the audio file to Gemini's File API
-        uploaded_file = genai.upload_file(path=file_path)
-        
-        while uploaded_file.state.name == "PROCESSING":
-            time.sleep(2)
-            uploaded_file = genai.get_file(uploaded_file.name)
-            
-        if uploaded_file.state.name == "FAILED":
-            raise Exception("File processing failed on Gemini's API servers.")
-            
-        # Call Gemini for transcription
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = (
-            "Provide a complete, chronologically structured transcription of this audio. "
-            "Identify speakers where distinct, and maintain high text fidelity."
-        )
-        response = model.generate_content([uploaded_file, prompt])
-        transcript_text = response.text
-        
-        # Clean up file on Google Cloud storage
-        genai.delete_file(uploaded_file.name)
-        
-    except Exception as e:
-        return f"Error transcribing audio content: {str(e)}"
-    finally:
-        # Clean up local temporary file
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            
-    # Save output to Knowledge Base
-    try:
-        os.makedirs("knowledge_base", exist_ok=True)
-        safe_title = re.sub(r'[^\w\-_\. ]', '_', title)
-        kb_path = os.path.join("knowledge_base", f"{safe_title}.txt")
-        with open(kb_path, "w", encoding="utf-8") as f:
-            f.write(f"Source URL: {video_url}\n")
-            f.write(f"Title: {title}\n")
-            f.write("=" * 50 + "\n\n")
-            f.write(transcript_text)
-            
-        return (
-            f"Successfully processed video: '{title}'\n"
-            f"Saved to Knowledge Base path: '{kb_path}'\n\n"
-            f"Transcript Preview:\n{transcript_text[:1200]}..."
-        )
-    except Exception as e:
-        return f"Error writing file to knowledge base: {str(e)}"
-
-def run_agent_workflow(chat_history: list, gemini_key: str, serp_key: str, model_id: str):
-    """
-    Main agent execution generator. Intercepts tool execution to provide
-    real-time structured step indicators back to the Streamlit UI.
-    """
+    os.environ["GROQ_API_KEY"] = groq_key
     configure_apis(gemini_key, serp_key)
+
+def run_deterministic_fallback_pipeline(user_query: str):
+    yield {"status": "thinking", "message": "Executing workflow pipeline..."}
     
-    # Process history into Gemini-accepted formats (system prompt separate)
-    system_instruction = "You are an advanced AI Video Assistant."
-    formatted_history = []
-    
-    for msg in chat_history:
-        role = msg["role"]
-        content = msg["content"]
-        if role == "system":
-            system_instruction = content
-            continue
-        formatted_history.append({
-            "role": "user" if role == "user" else "model",
-            "parts": [content]
-        })
+    # Direct link check
+    urls = re.findall(r'(https?://(?:www\.)?(?:youtube\.com|youtu\.be)\S+)', user_query)
+    if urls:
+        video_url = urls[0].strip().rstrip('.,;)')
+        yield {"status": "transcribing", "message": f"Extracting audio and compiling transcript for: {video_url}"}
+        result = transcribe_video(video_url)
         
-    model = genai.GenerativeModel(
-        model_name=model_id,
-        tools=[search_video, transcribe_video],
-        system_instruction=system_instruction
+        if result.get("status") == "success":
+            output = f"Transcript:\n{result.get('transcript')}\n\nSource Video URL: {video_url}"
+            yield {"status": "done", "message": output}
+            return
+        else:
+            yield {"status": "done", "message": f"Error: {result.get('message')}"}
+            return
+
+    # Step 1: Search Knowledge Base
+    yield {"status": "searching", "message": f"Checking local knowledge base for: '{user_query}'"}
+    kb_result = search_knowledge_base(user_query)
+    
+    if kb_result.get("status") == "success":
+        yield {"status": "searching_done", "message": "Match found in local database."}
+        output = (
+            f"Transcript:\n{kb_result.get('transcript')}\n\n"
+            f"Source Video URL: {kb_result.get('source_url')}\n"
+            f"(Retrieved from local Knowledge Base)"
+        )
+        yield {"status": "done", "message": output}
+        return
+
+    # Step 2: Search YouTube
+    yield {"status": "searching", "message": f"Searching YouTube for: '{user_query}'"}
+    found_url = search_video(user_query)
+    
+    if not found_url or "Error" in found_url or "No video" in found_url:
+        yield {"status": "done", "message": f"Could not locate a video: {found_url}"}
+        return
+        
+    yield {"status": "searching_done", "message": f"Found Video: {found_url}"}
+
+    # Step 3: Transcribe Video
+    yield {"status": "transcribing", "message": "Extracting audio and compiling transcript..."}
+    transcribe_result = transcribe_video(found_url)
+    
+    if transcribe_result.get("status") == "success":
+        output = f"Transcript:\n{transcribe_result.get('transcript')}\n\nSource Video URL: {found_url}"
+        yield {"status": "done", "message": output}
+    else:
+        yield {"status": "done", "message": f"Error transcribing video: {transcribe_result.get('message')}"}
+
+def run_agent_workflow(chat_history: list, gemini_key: str, serp_key: str, groq_key: str, model_id: str):
+    configure_environment_keys(gemini_key, serp_key, groq_key)
+    
+    user_query = chat_history[-1]["content"] if chat_history else ""
+    client = genai.Client(api_key=gemini_key)
+    
+    formatted_history = []
+    for msg in chat_history:
+        if msg["role"] == "system":
+            continue
+        formatted_history.append(
+            types.Content(
+                role="user" if msg["role"] == "user" else "model",
+                parts=[types.Part.from_text(text=msg["content"])]
+            )
+        )
+        
+    strict_instruction = (
+        "You are a Video Transcription Agent.\n"
+        "1. Always check the local knowledge base first using search_knowledge_base.\n"
+        "2. If search_knowledge_base succeeds, output the exact transcript directly without calling other tools. "
+        "Append 'Source Video URL: [source_url]' and then write '(Retrieved from local Knowledge Base)' as the final line.\n"
+        "3. If a YouTube URL is provided, call transcribe_video directly.\n"
+        "4. If no local transcript is found and no link is provided, call search_video, then call transcribe_video.\n"
+        "5. Output the transcript word-for-word without summarization.\n"
+        "6. Always end responses with: 'Source Video URL: [source_url]'."
     )
     
-    # Separate current query for dynamic tracking
-    user_query = ""
-    if formatted_history and formatted_history[-1]["role"] == "user":
-        user_query = formatted_history.pop()["parts"][0]
+    config = types.GenerateContentConfig(
+        system_instruction=strict_instruction,
+        tools=[search_knowledge_base, search_video, transcribe_video],
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+            disable=True
+        )
+    )
+    
+    if formatted_history and formatted_history[-1].role == "user":
+        formatted_history.pop()
         
-    chat = model.start_chat(history=formatted_history)
-    
-    yield {"status": "thinking", "message": "Analyzing request parameters..."}
-    response = chat.send_message(user_query)
-    
-    # Loop over tools as long as Gemini requests them
-    while response.function_calls:
-        for call in response.function_calls:
-            name = call.name
-            args = dict(call.args)
-            
-            if name == "search_video":
-                query_term = args.get("query", "")
-                yield {"status": "searching", "message": f"Searching YouTube: '{query_term}'"}
-                result = search_video(query_term)
-                yield {"status": "searching_done", "message": f"Identified Video: {result}"}
+    try:
+        chat = client.chats.create(
+            model=model_id,
+            config=config,
+            history=formatted_history
+        )
+        
+        time.sleep(1.0)
+        yield {"status": "thinking", "message": "Analyzing parameters..."}
+        response = call_with_retry(chat.send_message, user_query)
+        
+        while response.function_calls:
+            for call in response.function_calls:
+                name = call.name
+                args = call.args if call.args else {}
                 
-            elif name == "transcribe_video":
-                video_url = args.get("video_url", "")
-                yield {"status": "transcribing", "message": "Extracting audio and compiling transcript..."}
-                result = transcribe_video(video_url)
-                yield {"status": "transcribing_done", "message": "Saved transcript to Knowledge Base directory."}
-            else:
-                result = f"Unknown system function: {name}"
+                if name == "search_knowledge_base":
+                    query_term = args.get("query", "")
+                    yield {"status": "searching", "message": f"Checking local database for: '{query_term}'"}
+                    result_dict = search_knowledge_base(query_term)
+                    result = json.dumps(result_dict)
+                    yield {"status": "searching_done", "message": "Local database check complete."}
+                    
+                elif name == "search_video":
+                    query_term = args.get("query", "")
+                    yield {"status": "searching", "message": f"Searching YouTube: '{query_term}'"}
+                    result = search_video(query_term)
+                    yield {"status": "searching_done", "message": f"Identified Video: {result}"}
+                    
+                elif name == "transcribe_video":
+                    video_url = args.get("video_url", "")
+                    yield {"status": "transcribing", "message": "Extracting audio and compiling transcript..."}
+                    result_dict = transcribe_video(video_url)
+                    result = json.dumps(result_dict)
+                    yield {"status": "transcribing_done", "message": "Saved transcript to Knowledge Base directory."}
+                else:
+                    result = f"Unknown function: {name}"
+                    
+                yield {"status": "thinking", "message": "Synthesizing output data..."}
+                time.sleep(1.5)
                 
-            yield {"status": "thinking", "message": "Synthesizing output data..."}
-            
-            # Feed function results back into chat loop
-            response = chat.send_message(
-                genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=name,
-                        response={'result': result}
-                    )
+                part = types.Part.from_function_response(
+                    name=name,
+                    response={'result': result}
                 )
-            )
-            
-    yield {"status": "done", "message": response.text}
+                response = call_with_retry(chat.send_message, part)
+                
+        yield {"status": "done", "message": response.text}
+        
+    except Exception as e:
+        err_str = str(e)
+        if "429" in err_str or "quota" in err_str or "RESOURCE_EXHAUSTED" in err_str or "400" in err_str:
+            for step in run_deterministic_fallback_pipeline(user_query):
+                yield step
+        else:
+            raise e
