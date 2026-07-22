@@ -124,3 +124,10 @@ streamlit run frontend.py
 ```
 
 If the browser window does not open automatically, copy and paste the local network URL (typically `http://localhost:8501`) provided in your terminal output.
+
+---
+
+## Known Limitations and Technical Considerations
+
+* **API Quota Restrictions**: The free tier of Google AI Studio enforces a limit of 15 Requests Per Minute (RPM) and a daily quota cap of 20 multimodal/audio processing requests per day. Heavy consecutive queries may trigger temporary `429 Rate Limit` responses until the quota window resets.
+* **Datacenter IP Throttling**: When deployed on cloud hosting environments (such as Streamlit Community Cloud), YouTube actively blocks direct media downloads from datacenter IP addresses via `yt-dlp` (`HTTP Error 403: Forbidden`). The application mitigates this by attempting direct URI ingestion via Gemini's native API endpoints.
