@@ -30,11 +30,20 @@ def transcribe_via_gemini_uri(video_url: str, gemini_key: str) -> str:
 def download_youtube_audio(video_url: str) -> tuple:
     temp_filename = f"temp_audio_{int(time.time())}"
     ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
+        'format': 'bestaudio/best',
         'outtmpl': f'{temp_filename}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
+        # Bypasses 403 Forbidden blocks on cloud environments (Streamlit Cloud, AWS, etc.)
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+            }
+        }
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
@@ -85,41 +94,57 @@ def transcribe_video(video_url: str) -> dict:
     transcript_text = ""
     title = f"YouTube Video ({video_url})"
     
-    # Primary Method: Direct Gemini Native URI Ingestion (Prevents 403 Forbidden blocks on cloud)
+    # 1. Primary Method: Direct Gemini Native URI Ingestion
     if gemini_key and len(gemini_key.strip()) > 0:
         try:
             transcript_text = transcribe_via_gemini_uri(video_url, gemini_key)
-        except Exception:
+        except Exception as e:
+            err_msg = str(e)
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                return {
+                    "status": "error",
+                    "message": "Gemini API rate limit or daily quota reached. Please try again later."
+                }
             transcript_text = ""
             
-    # Secondary Method: Fallback to local audio download via yt-dlp + Groq/Gemini if direct URI fails
+    # 2. Secondary Method: Fallback to yt-dlp + Groq/Gemini local file upload
     if not transcript_text:
         try:
             file_path, downloaded_title = download_youtube_audio(video_url)
             if downloaded_title and downloaded_title != "Unknown Title":
                 title = downloaded_title
                 
+            # Prefer Groq Whisper first to preserve Gemini API quota
             if groq_key and len(groq_key.strip()) > 0:
                 try:
                     transcript_text = transcribe_with_groq_whisper(file_path, groq_key)
                 except Exception:
                     transcript_text = ""
                     
+            # Fallback to Gemini file upload if Groq wasn't available
             if not transcript_text and gemini_key and len(gemini_key.strip()) > 0:
                 try:
                     transcript_text = transcribe_with_gemini_file(file_path, gemini_key)
-                except Exception:
+                except Exception as e:
+                    err_msg = str(e)
+                    if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        return {
+                            "status": "error",
+                            "message": "Gemini API rate limit or daily quota reached. Please try again later."
+                        }
                     transcript_text = ""
                     
             if os.path.exists(file_path):
                 os.remove(file_path)
-        except Exception:
-            pass
+        except Exception as e:
+            return {"status": "error", "message": f"Failed downloading YouTube audio: {str(e)}"}
             
     if not transcript_text:
         return {
             "status": "error",
-            "message": "API Rate Limit Exceeded. You have exceeded your current Google API quota. Please try again in a few moments."
+            "message": "Transcription services unavailable. Please check your API keys or rate limits."
         }
         
     write_to_knowledge_base(title, video_url, transcript_text)
