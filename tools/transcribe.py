@@ -241,38 +241,36 @@ def transcribe_video(video_url: str) -> dict:
             "transcript": transcript_text
         }
 
-    # Step 3: Fallback to YouTube captions via youtube-transcript-api
+    # Step 3: Fallback to YouTube captions via youtube-transcript-api (Pass silently on exception)
     video_id = extract_video_id(video_url)
-    if not video_id:
-        return {
-            "status": "error",
-            "message": f"Invalid YouTube URL format: '{video_url}'"
-        }
-
-    try:
-        caption_text = fetch_youtube_english_captions(video_id)
-        if caption_text and caption_text.strip():
-            write_to_knowledge_base(title, video_url, caption_text)
-            return {
-                "status": "success",
-                "title": title,
-                "source_url": video_url,
-                "transcript": caption_text
-            }
-    except Exception:
-        pass
+    if video_id:
+        try:
+            caption_text = fetch_youtube_english_captions(video_id)
+            if caption_text and caption_text.strip():
+                write_to_knowledge_base(title, video_url, caption_text)
+                return {
+                    "status": "success",
+                    "title": title,
+                    "source_url": video_url,
+                    "transcript": caption_text
+                }
+        except Exception:
+            pass # Silently catch IP blocks/missing transcripts to allow Step 4 execution
 
     # Step 4: Fallback to SerpApi youtube_video_transcript engine
-    if serp_key:
-        serp_text = fetch_transcript_via_serpapi(video_id, serp_key)
-        if serp_text and serp_text.strip():
-            write_to_knowledge_base(title, video_url, serp_text)
-            return {
-                "status": "success",
-                "title": title,
-                "source_url": video_url,
-                "transcript": serp_text
-            }
+    if serp_key and video_id:
+        try:
+            serp_text = fetch_transcript_via_serpapi(video_id, serp_key)
+            if serp_text and serp_text.strip():
+                write_to_knowledge_base(title, video_url, serp_text)
+                return {
+                    "status": "success",
+                    "title": title,
+                    "source_url": video_url,
+                    "transcript": serp_text
+                }
+        except Exception:
+            pass
 
     # Step 5: Final error state if all 4 extraction pathways failed
     return {
