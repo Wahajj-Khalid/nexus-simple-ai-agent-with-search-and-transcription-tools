@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import requests
 import yt_dlp
 from google import genai
 from google.genai import types
@@ -123,10 +124,7 @@ def transcribe_with_gemini_file(file_path: str, gemini_key: str) -> str:
 
 
 def fetch_youtube_english_captions(video_id: str) -> str:
-    """
-    Fetches English (en, en-US) manual or auto-generated captions directly from YouTube.
-    Strictly restricted to English; does not fall back to other languages.
-    """
+    """Fetches English manual or auto-generated captions directly from YouTube."""
     ytt_api = YouTubeTranscriptApi()
 
     if hasattr(ytt_api, "list"):
@@ -137,14 +135,12 @@ def fetch_youtube_english_captions(video_id: str) -> str:
         fetched_data = ytt_api.fetch(video_id, languages=['en', 'en-US'])
         return " ".join([item['text'] for item in fetched_data])
 
-    # 1. Look specifically for manual English captions
     try:
         transcript = transcript_list.find_manually_created_transcript(['en', 'en-US'])
         return " ".join([item['text'] for item in transcript.fetch()])
     except NoTranscriptFound:
         pass
 
-    # 2. Look specifically for auto-generated English captions
     try:
         transcript = transcript_list.find_generated_transcript(['en', 'en-US'])
         return " ".join([item['text'] for item in transcript.fetch()])
@@ -154,21 +150,48 @@ def fetch_youtube_english_captions(video_id: str) -> str:
     raise NoTranscriptFound(video_id, ['en', 'en-US'], transcript_list)
 
 
+def fetch_transcript_via_serpapi(video_id: str, serp_key: str) -> str:
+    """Queries SerpApi's dedicated youtube_video_transcript engine using the Video ID."""
+    if not serp_key or not video_id:
+        return ""
+        
+    url = "https://serpapi.com/search.json"
+    params = {
+        "engine": "youtube_video_transcript",
+        "v": video_id,
+        "api_key": serp_key
+    }
+    try:
+        response = requests.get(url, params=params, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            transcript_list = data.get("transcript", [])
+            if transcript_list:
+                parts = [item.get("snippet", "") or item.get("text", "") for item in transcript_list]
+                full_text = " ".join([p for p in parts if p])
+                if full_text and len(full_text.strip()) > 0:
+                    return full_text
+    except Exception:
+        pass
+    return ""
+
+
 def transcribe_video(video_url: str) -> dict:
     """
     Agent Tool Function:
-    1. Tries direct Gemini Native URI Ingestion FIRST (bypasses local audio downloads & 403 errors).
-    2. If URI ingestion fails, falls back to yt-dlp audio download + Gemini/Groq model transcription.
-    3. If audio download fails, falls back to English YouTube captions.
-    4. Returns clean error message if all fail.
+    1. Tries direct Gemini Native URI Ingestion FIRST.
+    2. Falls back to yt-dlp audio download + Gemini/Groq model transcription.
+    3. Falls back to English YouTube captions via youtube-transcript-api.
+    4. Falls back to SerpApi youtube_video_transcript engine.
     """
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     groq_key = os.getenv("GROQ_API_KEY", "")
+    serp_key = os.getenv("SERPAPI_API_KEY", "")
 
     transcript_text = ""
     title = f"YouTube Video ({video_url})"
 
-    # Step 1: Direct Gemini Native URI Ingestion FIRST (Cloud Native Path)
+    # Step 1: Direct Gemini Native URI Ingestion FIRST
     if gemini_key and len(gemini_key.strip()) > 0:
         try:
             transcript_text = transcribe_via_gemini_uri(video_url, gemini_key)
@@ -191,14 +214,12 @@ def transcribe_video(video_url: str) -> dict:
         if downloaded_title and downloaded_title != "Unknown Title":
             title = downloaded_title
 
-        # Try Gemini File API
         if gemini_key and len(gemini_key.strip()) > 0:
             try:
                 transcript_text = transcribe_with_gemini_file(file_path, gemini_key)
             except Exception:
                 transcript_text = ""
 
-        # Fall back to Groq Whisper if Gemini File API fails
         if not transcript_text and groq_key and len(groq_key.strip()) > 0:
             try:
                 transcript_text = transcribe_with_groq_whisper(file_path, groq_key)
@@ -206,7 +227,6 @@ def transcribe_video(video_url: str) -> dict:
                 transcript_text = ""
 
     except Exception:
-        # Catch audio download failure (e.g. 403 Forbidden cloud IP block)
         pass
     finally:
         if file_path and os.path.exists(file_path):
@@ -221,7 +241,7 @@ def transcribe_video(video_url: str) -> dict:
             "transcript": transcript_text
         }
 
-    # Step 3: Fallback to YouTube captions (English manual or auto-generated only)
+    # Step 3: Fallback to YouTube captions via youtube-transcript-api
     video_id = extract_video_id(video_url)
     if not video_id:
         return {
@@ -239,32 +259,26 @@ def transcribe_video(video_url: str) -> dict:
                 "source_url": video_url,
                 "transcript": caption_text
             }
-        else:
+    except Exception:
+        pass
+
+    # Step 4: Fallback to SerpApi youtube_video_transcript engine
+    if serp_key:
+        serp_text = fetch_transcript_via_serpapi(video_id, serp_key)
+        if serp_text and serp_text.strip():
+            write_to_knowledge_base(title, video_url, serp_text)
             return {
-                "status": "error",
-                "message": "Retrieved English transcript was empty."
+                "status": "success",
+                "title": title,
+                "source_url": video_url,
+                "transcript": serp_text
             }
 
-    except TranscriptsDisabled:
-        return {
-            "status": "error",
-            "message": "Transcripts are disabled for this YouTube video."
-        }
-    except NoTranscriptFound:
-        return {
-            "status": "error",
-            "message": "No English transcript (manual or auto-generated) is available for this video."
-        }
-    except VideoUnavailable:
-        return {
-            "status": "error",
-            "message": "The YouTube video is unavailable or private."
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Transcription failed: {str(e)}"
-        }
+    # Step 5: Final error state if all 4 extraction pathways failed
+    return {
+        "status": "error",
+        "message": "Unable to retrieve video transcript via Gemini URI, Audio Download, YouTube Captions, or SerpApi."
+    }
 
 
 def transcribe_local_upload(temp_file_path: str, original_filename: str, gemini_key: str, groq_key: str = "") -> dict:
