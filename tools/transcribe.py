@@ -7,34 +7,40 @@ from groq import Groq
 from tools.config import call_with_retry
 from tools.knowledge_base import write_to_knowledge_base
 
+def transcribe_via_gemini_uri(video_url: str, gemini_key: str) -> str:
+    """Passes YouTube video URL directly to Google Gemini for cloud processing."""
+    client = genai.Client(api_key=gemini_key)
+    prompt = (
+        "Provide a complete, chronologically structured transcription of this video. "
+        "Output only the transcription text. Do not summarize or edit."
+    )
+    response = call_with_retry(
+        client.models.generate_content,
+        model="gemini-3.5-flash",
+        contents=[
+            types.Part.from_uri(
+                file_uri=video_url,
+                mime_type="video/mp4"
+            ),
+            prompt
+        ]
+    )
+    return response.text
+
 def download_youtube_audio(video_url: str) -> tuple:
     temp_filename = f"temp_audio_{int(time.time())}"
-    
     ydl_opts = {
         'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'outtmpl': f'{temp_filename}.%(ext)s',
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-        },
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'mweb']
-            }
-        }
     }
-    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
         ext = info.get('ext', 'm4a')
         title = info.get('title', 'Unknown Title')
         file_path = f"{temp_filename}.{ext}"
-        
     return file_path, title
 
 def transcribe_with_groq_whisper(file_path: str, groq_key: str) -> str:
@@ -47,7 +53,7 @@ def transcribe_with_groq_whisper(file_path: str, groq_key: str) -> str:
         )
     return transcription.text
 
-def transcribe_with_gemini(file_path: str, gemini_key: str) -> str:
+def transcribe_with_gemini_file(file_path: str, gemini_key: str) -> str:
     client = genai.Client(api_key=gemini_key)
     uploaded_file = client.files.upload(file=file_path)
     
@@ -72,73 +78,48 @@ def transcribe_with_gemini(file_path: str, gemini_key: str) -> str:
     client.files.delete(name=uploaded_file.name)
     return transcript_text
 
-def transcribe_via_gemini_uri(video_url: str, gemini_key: str) -> str:
-    """Passes direct YouTube URL to Gemini native URI ingestion for cloud deployments."""
-    client = genai.Client(api_key=gemini_key)
-    prompt = (
-        "Provide a complete, chronologically structured transcription of this video. "
-        "Output only the transcription text. Do not summarize or edit."
-    )
-    response = call_with_retry(
-        client.models.generate_content,
-        model="gemini-3.5-flash",
-        contents=[
-            types.Part.from_uri(
-                file_uri=video_url,
-                mime_type="video/mp4"
-            ),
-            prompt
-        ]
-    )
-    return response.text
-
 def transcribe_video(video_url: str) -> dict:
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     groq_key = os.getenv("GROQ_API_KEY", "")
     
     transcript_text = ""
-    title = "YouTube Video"
+    title = f"YouTube Video ({video_url})"
     
-    # Step 1: Normal execution path (local audio download)
-    try:
-        file_path, downloaded_title = download_youtube_audio(video_url)
-        if downloaded_title and downloaded_title != "Unknown Title":
-            title = downloaded_title
-            
-        if groq_key and len(groq_key.strip()) > 0:
-            try:
-                transcript_text = transcribe_with_groq_whisper(file_path, groq_key)
-            except Exception:
-                transcript_text = ""
-                
-        if not transcript_text and gemini_key and len(gemini_key.strip()) > 0:
-            try:
-                transcript_text = transcribe_with_gemini(file_path, gemini_key)
-            except Exception:
-                transcript_text = ""
-                
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            
-    except Exception:
-        # Suppress 403 download failure on cloud deployment and fall through
-        pass
-
-    # Step 2: Cloud Fallback via direct Gemini URI ingestion if Step 1 failed
-    if not transcript_text and gemini_key and len(gemini_key.strip()) > 0:
+    # Primary Method: Direct Gemini Native URI Ingestion (Prevents 403 Forbidden blocks on cloud)
+    if gemini_key and len(gemini_key.strip()) > 0:
         try:
             transcript_text = transcribe_via_gemini_uri(video_url, gemini_key)
         except Exception:
-            # Mask underlying errors to output a clean rate limit message to UI
-            return {
-                "status": "error",
-                "message": "API Rate Limit Exceeded. You have exceeded your current Google API quota. Please try again in a few moments."
-            }
-
+            transcript_text = ""
+            
+    # Secondary Method: Fallback to local audio download via yt-dlp + Groq/Gemini if direct URI fails
+    if not transcript_text:
+        try:
+            file_path, downloaded_title = download_youtube_audio(video_url)
+            if downloaded_title and downloaded_title != "Unknown Title":
+                title = downloaded_title
+                
+            if groq_key and len(groq_key.strip()) > 0:
+                try:
+                    transcript_text = transcribe_with_groq_whisper(file_path, groq_key)
+                except Exception:
+                    transcript_text = ""
+                    
+            if not transcript_text and gemini_key and len(gemini_key.strip()) > 0:
+                try:
+                    transcript_text = transcribe_with_gemini_file(file_path, gemini_key)
+                except Exception:
+                    transcript_text = ""
+                    
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+            
     if not transcript_text:
         return {
             "status": "error",
-            "message": "API Rate Limit Exceeded. Please check your active keys inside Settings."
+            "message": "API Rate Limit Exceeded. You have exceeded your current Google API quota. Please try again in a few moments."
         }
         
     write_to_knowledge_base(title, video_url, transcript_text)
@@ -164,7 +145,7 @@ def transcribe_local_upload(temp_file_path: str, original_filename: str, gemini_
             
     if not transcript_text and gemini_key:
         try:
-            transcript_text = transcribe_with_gemini(temp_file_path, gemini_key)
+            transcript_text = transcribe_with_gemini_file(temp_file_path, gemini_key)
         except Exception as e:
             return {"status": "error", "message": f"Error transcribing file: {str(e)}"}
             
