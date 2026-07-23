@@ -3,6 +3,7 @@ import re
 import time
 import yt_dlp
 from google import genai
+from google.genai import types
 from groq import Groq
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
@@ -25,6 +26,27 @@ def extract_video_id(url: str) -> str:
         if match:
             return match.group(1)
     return ""
+
+
+def transcribe_via_gemini_uri(video_url: str, gemini_key: str) -> str:
+    """Passes YouTube video URL directly to Google Gemini for native cloud processing."""
+    client = genai.Client(api_key=gemini_key)
+    prompt = (
+        "Provide a complete, chronologically structured transcription of this video. "
+        "Output only the transcription text. Do not summarize or edit."
+    )
+    response = call_with_retry(
+        client.models.generate_content,
+        model="gemini-3.5-flash",
+        contents=[
+            types.Part.from_uri(
+                file_uri=video_url,
+                mime_type="video/mp4"
+            ),
+            prompt
+        ]
+    )
+    return response.text
 
 
 def download_youtube_audio(video_url: str) -> tuple:
@@ -107,13 +129,11 @@ def fetch_youtube_english_captions(video_id: str) -> str:
     """
     ytt_api = YouTubeTranscriptApi()
 
-    # Retrieve available transcript metadata list
     if hasattr(ytt_api, "list"):
         transcript_list = ytt_api.list(video_id)
     elif hasattr(YouTubeTranscriptApi, "list_transcripts"):
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
     else:
-        # Direct fetch shortcut if listing methods are unsupported
         fetched_data = ytt_api.fetch(video_id, languages=['en', 'en-US'])
         return " ".join([item['text'] for item in fetched_data])
 
@@ -137,18 +157,35 @@ def fetch_youtube_english_captions(video_id: str) -> str:
 def transcribe_video(video_url: str) -> dict:
     """
     Agent Tool Function:
-    1. Tries audio download + Gemini/Groq model transcription first.
-    2. If audio download fails (e.g. 403 Forbidden), falls back to English YouTube captions.
-    3. Returns clean error message if all fail.
+    1. Tries direct Gemini Native URI Ingestion FIRST (bypasses local audio downloads & 403 errors).
+    2. If URI ingestion fails, falls back to yt-dlp audio download + Gemini/Groq model transcription.
+    3. If audio download fails, falls back to English YouTube captions.
+    4. Returns clean error message if all fail.
     """
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     groq_key = os.getenv("GROQ_API_KEY", "")
 
     transcript_text = ""
     title = f"YouTube Video ({video_url})"
-    file_path = None
 
-    # Step 1: Attempt actual direct transcription (yt-dlp -> AI Model)
+    # Step 1: Direct Gemini Native URI Ingestion FIRST (Cloud Native Path)
+    if gemini_key and len(gemini_key.strip()) > 0:
+        try:
+            transcript_text = transcribe_via_gemini_uri(video_url, gemini_key)
+        except Exception:
+            transcript_text = ""
+
+    if transcript_text and transcript_text.strip():
+        write_to_knowledge_base(title, video_url, transcript_text)
+        return {
+            "status": "success",
+            "title": title,
+            "source_url": video_url,
+            "transcript": transcript_text
+        }
+
+    # Step 2: Attempt direct audio extraction via yt-dlp -> AI Model
+    file_path = None
     try:
         file_path, downloaded_title = download_youtube_audio(video_url)
         if downloaded_title and downloaded_title != "Unknown Title":
@@ -161,7 +198,7 @@ def transcribe_video(video_url: str) -> dict:
             except Exception:
                 transcript_text = ""
 
-        # Fall back to Groq Whisper if Gemini fails
+        # Fall back to Groq Whisper if Gemini File API fails
         if not transcript_text and groq_key and len(groq_key.strip()) > 0:
             try:
                 transcript_text = transcribe_with_groq_whisper(file_path, groq_key)
@@ -175,7 +212,6 @@ def transcribe_video(video_url: str) -> dict:
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
 
-    # Return immediately if primary audio transcription succeeded
     if transcript_text and transcript_text.strip():
         write_to_knowledge_base(title, video_url, transcript_text)
         return {
@@ -185,7 +221,7 @@ def transcribe_video(video_url: str) -> dict:
             "transcript": transcript_text
         }
 
-    # Step 2: Fallback to YouTube captions (English manual or auto-generated only)
+    # Step 3: Fallback to YouTube captions (English manual or auto-generated only)
     video_id = extract_video_id(video_url)
     if not video_id:
         return {
