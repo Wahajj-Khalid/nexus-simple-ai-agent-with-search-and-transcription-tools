@@ -19,13 +19,14 @@ def download_youtube_audio(video_url: str) -> tuple:
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        # Headers & client overrides required to prevent 403 Forbidden on cloud servers (Streamlit/AWS)
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
         },
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'mweb', 'web_embedded'],
+                'player_client': ['android', 'mweb'],
+                'skip': ['hls', 'dash']
             }
         }
     }
